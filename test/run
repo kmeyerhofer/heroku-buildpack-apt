@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+
+testCompilePackageNames() {
+  bp_dir=$(mktmpdir)
+  build_dir=$(mktmpdir)
+  cache_dir=$(mktmpdir)
+  compile "package-names" "${bp_dir}" "${build_dir}" "${cache_dir}"
+
+  assertCaptured "Updating APT package index"
+  assertCaptured "Fetching .debs for xmlsec1"
+  assertCaptured "Fetching .debs for s3cmd wget"
+  assertCaptured "Fetching .debs for mysql-client-*"
+  assertCaptured "Installing xmlsec1"
+  assertCaptured "Installing s3cmd"
+  assertCaptured "Installing wget"
+  assertCaptured "Installing mysql-client"
+  assertCaptured "Installing mysql-client-core"
+  assertCaptured "Writing profile script"
+  assertCaptured "Rewrite package-config files"
+  assertCapturedSuccess
+
+  assertProfileContains 'export PATH="$HOME/.apt/usr/bin:$PATH"' "$build_dir"
+  assertProfileContains 'export LD_LIBRARY_PATH="$HOME/.apt/usr/lib/x86_64-linux-gnu:$HOME/.apt/usr/lib/i386-linux-gnu:$HOME/.apt/usr/lib:$LD_LIBRARY_PATH"' "$build_dir"
+  assertProfileContains 'export LIBRARY_PATH="$HOME/.apt/usr/lib/x86_64-linux-gnu:$HOME/.apt/usr/lib/i386-linux-gnu:$HOME/.apt/usr/lib:$LIBRARY_PATH"' "$build_dir"
+  assertProfileContains 'export INCLUDE_PATH="$HOME/.apt/usr/include:$HOME/.apt/usr/include/x86_64-linux-gnu:$INCLUDE_PATH"' "$build_dir"
+  assertProfileContains 'export CPATH="$INCLUDE_PATH"' "$build_dir"
+  assertProfileContains 'export CPPPATH="$INCLUDE_PATH"' "$build_dir"
+  assertProfileContains 'export PKG_CONFIG_PATH="$HOME/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:$HOME/.apt/usr/lib/i386-linux-gnu/pkgconfig:$HOME/.apt/usr/lib/pkgconfig:$PKG_CONFIG_PATH"' "$build_dir"
+  assertProfileNotContains 'export GIT_EXEC_PATH="$HOME/.apt/usr/lib/git-core"' "$build_dir"
+
+  assertExportContains "declare -x PATH=\"$build_dir/.apt/usr/bin:" "$bp_dir"
+  assertExportContains "declare -x LD_LIBRARY_PATH=\"$build_dir/.apt/usr/lib/x86_64-linux-gnu:$build_dir/.apt/usr/lib/i386-linux-gnu:$build_dir/.apt/usr/lib:\"" "$bp_dir"
+  assertExportContains "declare -x LIBRARY_PATH=\"$build_dir/.apt/usr/lib/x86_64-linux-gnu:$build_dir/.apt/usr/lib/i386-linux-gnu:$build_dir/.apt/usr/lib:\"" "$bp_dir"
+  assertExportContains "declare -x INCLUDE_PATH=\"$build_dir/.apt/usr/include:$build_dir/.apt/usr/include/x86_64-linux-gnu:\"" "$bp_dir"
+  assertExportContains "declare -x CPATH=\"$build_dir/.apt/usr/include:$build_dir/.apt/usr/include/x86_64-linux-gnu:\"" "$bp_dir"
+  assertExportContains "declare -x CPPPATH=\"$build_dir/.apt/usr/include:$build_dir/.apt/usr/include/x86_64-linux-gnu:\"" "$bp_dir"
+  assertExportContains "declare -x PKG_CONFIG_PATH=\"$build_dir/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:$build_dir/.apt/usr/lib/i386-linux-gnu/pkgconfig:$build_dir/.apt/usr/lib/pkgconfig:\"" "$bp_dir"
+  assertExportNotContains "declare -x GIT_EXEC_PATH=\"$build_dir/.apt/usr/lib/git-core\"" "$bp_dir"
+}
+
+testCacheInvalidation() {
+  bp_dir=$(mktmpdir)
+  build_dir=$(mktmpdir)
+  cache_dir=$(mktmpdir)
+
+  # Cold cache
+  compile "package-names" "${bp_dir}" "${build_dir}" "${cache_dir}"
+  assertCaptured "Detected Aptfile or Stack changes, flushing cache"
+  assertCapturedSuccess
+
+  # Warm cache
+  compile "package-names" "${bp_dir}" "${build_dir}" "${cache_dir}"
+  assertCaptured "Reusing cache"
+  assertCapturedSuccess
+
+  # Cache invalidated on stack change
+  echo 'some-old-stack' > "${cache_dir}/.apt/STACK"
+  compile "package-names" "${bp_dir}" "${build_dir}" "${cache_dir}"
+  assertCaptured "Detected Aptfile or Stack changes, flushing cache"
+  assertCapturedSuccess
+
+  # Cache invalidated if stack version file missing (eg cache from old buildpack version)
+  rm "${cache_dir}/.apt/STACK"
+  compile "package-names" "${bp_dir}" "${build_dir}" "${cache_dir}"
+  assertCaptured "Detected Aptfile or Stack changes, flushing cache"
+  assertCapturedSuccess
+}
+
+testReportPackageNames() {
+  report "package-names"
+  assertCaptured "packages: \"mysql-client-*,s3cmd,wget,xmlsec1\""
+  assertNotCaptured "custom_packages"
+  assertNotCaptured "custom_repositories"
+  assertCapturedSuccess
+}
+
+testCompileCustomPackageUrl() {
+  declare -A download_urls=(
+    [heroku-22]="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb"
+    # no noble package for wkhtmltopdf yet, so using jammy package
+    [heroku-24]="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb"
+  )
+  compile "custom-package-url-$STACK"
+  assertCaptured "Updating APT package index"
+  assertCaptured "Fetching ${download_urls[$STACK]}"
+  assertCaptured "Installing wkhtmltox"
+  assertCaptured "Writing profile script"
+  assertCaptured "Rewrite package-config files"
+  assertCapturedSuccess
+}
+
+testReportCustomPackageUrl() {
+  declare -A download_urls=(
+    [heroku-22]="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb"
+    # no noble package for wkhtmltopdf yet, so using jammy package
+    [heroku-24]="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb"
+  )
+  report "custom-package-url-$STACK"
+  assertNotCaptured "^packages"
+  assertCaptured "custom_packages: \"${download_urls[$STACK]}\""
+  assertNotCaptured "custom_repositories"
+  assertCapturedSuccess
+}
+
+testCompileCustomRepository() {
+  declare -A ubuntu_release_names=(
+    [heroku-22]="jammy"
+    [heroku-24]="noble"
+  )
+  compile "custom-repository-$STACK"
+  assertCaptured "Adding custom repositories"
+  assertCaptured "Updating APT package index"
+  assertCaptured "http://us.archive.ubuntu.com/ubuntu ${ubuntu_release_names[$STACK]}/multiverse amd64 Packages"
+  assertCaptured "Fetching .debs for fasttracker2"
+  assertCaptured "Installing fasttracker2"
+  assertCaptured "Writing profile script"
+  assertCaptured "Rewrite package-config files"
+  assertCapturedSuccess
+}
+
+testReportCustomRepository() {
+  declare -A ubuntu_release_names=(
+      [heroku-22]="jammy"
+      [heroku-24]="noble"
+    )
+  report "custom-repository-$STACK"
+  assertCaptured "packages: \"fasttracker2\""
+  assertNotCaptured "custom_packages"
+  assertCaptured "custom_repositories: \"deb http://us.archive.ubuntu.com/ubuntu/ ${ubuntu_release_names[$STACK]} multiverse\""
+  assertCapturedSuccess
+}
+
+testCompileEmpty() {
+  compile "empty"
+  assertCaptured "You have no packages listed in your Aptfile"
+  assertNotCaptured "Updating APT package index"
+  assertCapturedSuccess
+}
+
+testReportEmpty() {
+  report "empty"
+  assertNotCaptured "^packages"
+  assertNotCaptured "custom_packages"
+  assertNotCaptured "custom_repositories"
+  assertCapturedSuccess
+}
+
+testCompileOnlyComments() {
+  compile "only-comments"
+  assertCaptured "You have no packages listed in your Aptfile"
+  assertNotCaptured "Updating APT package index"
+  assertCapturedSuccess
+}
+
+testReportOnlyComments() {
+  report "only-comments"
+  assertNotCaptured "^packages"
+  assertNotCaptured "custom_packages"
+  assertNotCaptured "custom_repositories"
+  assertCapturedSuccess
+}
+
+testCompileCustomRepositoryNoPackages() {
+  compile "custom-repository-no-packages"
+  assertCaptured "You have no packages listed in your Aptfile"
+  assertNotCaptured "Updating APT package index"
+  assertCapturedSuccess
+}
+
+testReportCustomRepositoryNoPackages() {
+  report "custom-repository-no-packages"
+  assertNotCaptured "^packages"
+  assertNotCaptured "custom_packages"
+  assertCaptured "custom_repositories: \"deb http://us.archive.ubuntu.com/ubuntu/ jammy multiverse\""
+  assertCapturedSuccess
+}
+
+testGitEnvConfig() {
+  bp_dir=$(mktmpdir)
+  build_dir=$(mktmpdir)
+  compile "git" "${bp_dir}" "${build_dir}"
+
+  assertCaptured "Setting GIT_EXEC_PATH"
+  assertCapturedSuccess
+
+  assertProfileContains 'export GIT_EXEC_PATH="$HOME/.apt/usr/lib/git-core"' "$build_dir"
+
+  assertExportContains "declare -x GIT_EXEC_PATH=\"$build_dir/.apt/usr/lib/git-core\"" "$bp_dir"
+}
+
+pushd "$(dirname 0)" >/dev/null || exit 1
+popd >/dev/null || exit 1
+
+source "$(pwd)"/test/utils
+
+compile() {
+  default_process_types_cleanup
+  fixture="$1"
+  bp_dir=${2:-$(mktmpdir)}
+  build_dir=${3:-$(mktmpdir)}
+  cache_dir=${4:-$(mktmpdir)}
+  env_dir=$(mktmpdir)
+  cp -a "$(pwd)"/* "${bp_dir}"
+  cp -a "${bp_dir}"/test/fixtures/"$fixture"/. "${build_dir}"
+  capture "${bp_dir}"/bin/compile "${build_dir}" "${cache_dir}" "${env_dir}"
+}
+
+report() {
+  default_process_types_cleanup
+  fixture="$1"
+  bp_dir=${2:-$(mktmpdir)}
+  build_dir=${3:-$(mktmpdir)}
+  cache_dir=${4:-$(mktmpdir)}
+  env_dir=$(mktmpdir)
+  cp -a "$(pwd)"/* "${bp_dir}"
+  cp -a "${bp_dir}"/test/fixtures/"$fixture"/. "${build_dir}"
+  capture "${bp_dir}"/bin/report "${build_dir}" "${cache_dir}" "${env_dir}"
+}
+
+mktmpdir() {
+  dir=$(mktemp -t testXXXXX)
+  rm -rf "$dir"
+  mkdir "$dir"
+  echo "$dir"
+}
+
+default_process_types_cleanup() {
+  file="/tmp/default_process_types"
+  if [ -f "$file" ]; then
+    rm "$file"
+  fi
+}
+
+assertProfileContains() {
+  text="$1"
+  build_dir="$2"
+  assertFileContains "$text" "$build_dir/.profile.d/000_apt.sh"
+}
+
+assertProfileNotContains() {
+  text="$1"
+  build_dir="$2"
+  assertFileNotContains "$text" "$build_dir/.profile.d/000_apt.sh"
+}
+
+assertExportContains() {
+  text="$1"
+  bp_dir="$2"
+  assertFileContains "$text" "$bp_dir/export"
+}
+
+assertExportNotContains() {
+  text="$1"
+  bp_dir="$2"
+  assertFileNotContains "$text" "$bp_dir/export"
+}
+
+source "$(pwd)"/test/shunit2
